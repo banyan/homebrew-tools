@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+
+set -e
+
+# GitHub repository information
+REPO_OWNER="banyan"
+REPO_NAME="git-cb"
+FORMULA_PATH="Formula/git-cb.rb"
+
+fetch_latest_release() {
+  local api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
+  curl -s -H "Accept: application/vnd.github.v3+json" "${api_url}"
+}
+
+calculate_sha256() {
+  local file_path="$1"
+
+  if command -v sha256sum > /dev/null; then
+    sha256sum "${file_path}" | cut -d ' ' -f 1
+  elif command -v shasum > /dev/null; then
+    shasum -a 256 "${file_path}" | cut -d ' ' -f 1
+  else
+    echo "Error: No SHA256 calculation tool found (sha256sum or shasum)" >&2
+    exit 1
+  fi
+}
+
+download_file() {
+  local url="$1"
+  local output_path="$2"
+
+  echo "Downloading ${url} to ${output_path}..."
+
+  mkdir -p "$(dirname "${output_path}")"
+
+  curl -s -L "${url}" -o "${output_path}"
+
+  if [ ! -f "${output_path}" ] || [ ! -s "${output_path}" ]; then
+    echo "Error: Failed to download ${url}" >&2
+    exit 1
+  fi
+}
+
+# Function to update the formula file
+update_formula() {
+  local version="$1"
+  local tarball_url="$2"
+  local sha256="$3"
+
+  echo "Updating formula with:"
+  echo "  Version: ${version}"
+  echo "  URL: ${tarball_url}"
+  echo "  SHA256: ${sha256}"
+
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    sed -i '' "s|url \".*\"|url \"${tarball_url}\"|" "${FORMULA_PATH}"
+    sed -i '' "s|sha256 \".*\"|sha256 \"${sha256}\"|" "${FORMULA_PATH}"
+  else
+    sed -i "s|url \".*\"|url \"${tarball_url}\"|" "${FORMULA_PATH}"
+    sed -i "s|sha256 \".*\"|sha256 \"${sha256}\"|" "${FORMULA_PATH}"
+  fi
+
+  echo "Formula updated successfully!"
+}
+
+echo "Starting update process..."
+
+release_json=$(fetch_latest_release)
+echo "Received response from GitHub API"
+
+echo "Fetching latest release for ${REPO_OWNER}/${REPO_NAME}..."
+
+tag_name=$(echo "${release_json}" | jq -r '.tag_name')
+echo "Using jq to parse JSON: tag_name=${tag_name}"
+
+version=${tag_name#v}
+echo "Version: ${version}"
+
+archive_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/${tag_name}.tar.gz"
+echo "Archive URL: ${archive_url}"
+
+temp_dir="tmp"
+tarball_path="${temp_dir}/${REPO_NAME}-${version}.tar.gz"
+download_file "${archive_url}" "${tarball_path}"
+
+sha256=$(calculate_sha256 "${tarball_path}")
+echo "SHA256: ${sha256}"
+
+update_formula "${version}" "${archive_url}" "${sha256}"
+
+rm -rf "${temp_dir}"
+echo "Done!"
